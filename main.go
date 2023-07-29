@@ -45,6 +45,10 @@ func main() {
 	default:
 		fmt.Println("opção não reconhecida")
 	}
+
+	fmt.Printf("ENTER para sair...")
+	reader = bufio.NewReader(os.Stdin)
+	reader.ReadRune()
 }
 
 func Escrever() error {
@@ -132,7 +136,7 @@ func EscreverFile(path string) string {
 	}
 
 	//grava path original
-	if _, err := fDest.Write([]byte(fmt.Sprintf("%s=%s", C_PATH, path))); err != nil {
+	if _, err := fDest.Write(cryptBytes([]byte(fmt.Sprintf("%s=%s", C_PATH, path)))); err != nil {
 		fDest.Close() // ignore error; Write error takes precedence
 		log.Fatal("Err Write 1=", err)
 	}
@@ -147,7 +151,8 @@ func EscreverFile(path string) string {
 		qtd++
 
 		//grava caminho arquivo atual
-		if _, err := fDest.Write([]byte(fmt.Sprintf("\r\n%s=%s\r\n", C_FILE, f))); err != nil {
+		//if _, err := fDest.Write([]byte(fmt.Sprintf("\r\n%s=%s\r\n", C_FILE, f))); err != nil {
+		if _, err := fDest.Write(cryptBytes([]byte(fmt.Sprintf("\r\n%s=%s\r\n", C_FILE, f)))); err != nil {
 			fDest.Close() // ignore error; Write error takes precedence
 			log.Fatal("Err Write 2=", err)
 		}
@@ -157,9 +162,17 @@ func EscreverFile(path string) string {
 		if err != nil {
 			log.Fatal("Err ReadFile=", err)
 		}
+
+		byt = cryptBytes(byt)
+
+		if err != nil {
+			fDest.Close()
+			log.Fatal("Err cryptByt=", err)
+		}
+
 		//grava conteudo arquivo atual
 		if _, err := fDest.Write(byt); err != nil {
-			fDest.Close() // ignore error; Write error takes precedence
+			fDest.Close()
 			log.Fatal("Err Write 3=", err)
 		}
 	}
@@ -172,6 +185,18 @@ func EscreverFile(path string) string {
 	fmt.Printf("Conteudo gravado no arquivo %s\n", destFile)
 
 	return destFile
+}
+
+func cryptBytes(byt []byte) []byte {
+	for i, b := range byt {
+		if b == 0x00 {
+			b = 0xff
+		} else {
+			b = b - 0x1
+		}
+		byt[i] = b
+	}
+	return byt
 }
 
 func dirExists(filename string) bool {
