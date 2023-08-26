@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	b64 "encoding/base64"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -16,12 +17,13 @@ import (
 
 var reader *bufio.Reader
 
-var FILTER_EXT = "|.dll|.exe|.zip|.pdb|.db|.ico|.png|.jpg|.jpeg|.cache|"
+var FILTER_EXT = "|.dll|.exe|.zip|.pdb|.db|.ico|.png|.jpg|.jpeg|.cache|.ttf|.woff2|"
 
 var FILTER_PATH = [3]string{`\bin\`, `\obj\`, `\.git\`}
 
-const C_PATH = "$@$@PATH$@$@"
-const C_FILE = "$@$@FILE$@$@"
+const C_PATH = "$@$@PATH@$@$"
+const C_FILE = "$@$@FILE@$@$"
+const C_FILE_base64 = "X#X#FILE#X#X"
 
 func main() {
 	//testes
@@ -39,16 +41,12 @@ func main() {
 
 	switch strings.ToUpper(string(char)) {
 	case "L":
-		fmt.Println("L(er)")
+		Ler()
 	case "E":
 		Escrever()
 	default:
 		fmt.Println("opção não reconhecida")
 	}
-
-	fmt.Printf("ENTER para sair...")
-	reader = bufio.NewReader(os.Stdin)
-	reader.ReadRune()
 }
 
 func Escrever() error {
@@ -66,9 +64,25 @@ func Escrever() error {
 		panic(fmt.Sprintf("O Caminho não foi encontrado : <%s>\n", path))
 	}
 
-	fmt.Printf("Quer zipar o arquivo depois da geração ? S(im) / N(ão) ?")
+	fmt.Printf("Filtrar arquivos binários e pastas específicas ? S(im) / N(ão) ?")
 	reader = bufio.NewReader(os.Stdin)
 	char, _, err := reader.ReadRune()
+	if err != nil {
+		fmt.Println(err)
+	}
+	filtrarArquivos := strings.ToUpper(string(char)) == "S"
+
+	fmt.Printf("Encoda os arquivos usando base64 ? S(im) / N(ão) ?")
+	reader = bufio.NewReader(os.Stdin)
+	char, _, err = reader.ReadRune()
+	if err != nil {
+		fmt.Println(err)
+	}
+	encodarBase64 := strings.ToUpper(string(char)) == "S"
+
+	fmt.Printf("Quer zipar o arquivo depois da geração ? S(im) / N(ão) ?")
+	reader = bufio.NewReader(os.Stdin)
+	char, _, err = reader.ReadRune()
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -77,7 +91,7 @@ func Escrever() error {
 	start := time.Now()
 	start1 := time.Now()
 
-	destFile := EscreverFile(path)
+	destFile := EscreverFile(path, filtrarArquivos, encodarBase64)
 
 	elapsed1 := time.Since(start1)
 
@@ -98,17 +112,20 @@ func Escrever() error {
 	return nil
 }
 
-func EscreverFile(path string) string {
+func EscreverFile(path string, filtrarArquivos bool, encodarBase64 bool) string {
 
 	allFiles := make([]string, 0)
 	allFiles = getAllFilesInDir(path, allFiles)
 
 	fmt.Printf("Processando %v arquivos...\n", len(allFiles))
 
-	fmt.Println("Filtrando os arquivos indesejados...")
-	allFiles, qtd := filterFiles(allFiles)
-	fmt.Printf("Depois do filtro : %v arquivos\n", qtd)
+	qtd := 0
 
+	if filtrarArquivos {
+		fmt.Println("Filtrando os arquivos indesejados...")
+		allFiles, qtd = filterFiles(allFiles, filtrarArquivos)
+		fmt.Printf("Depois do filtro : %v arquivos\n", qtd)
+	}
 	//ordenando os arquivos por nome
 	//serve apenas para poder comparar o outro arquivo gerado pela rotina .Net
 	fmt.Println("Ordenando os arquivos por nome...")
@@ -118,7 +135,7 @@ func EscreverFile(path string) string {
 	fmt.Println("Processamento dos arquivos elegíveis...")
 
 	//destFile := `C:\temp\test.txt`
-	destFile := fmt.Sprint(path, "_go.txt")
+	destFile := fmt.Sprint(path, "_go.gp")
 
 	_, err := os.Stat(destFile)
 	if !os.IsNotExist(err) {
@@ -136,7 +153,7 @@ func EscreverFile(path string) string {
 	}
 
 	//grava path original
-	if _, err := fDest.Write(cryptBytes([]byte(fmt.Sprintf("%s=%s", C_PATH, path)))); err != nil {
+	if _, err := fDest.Write([]byte(fmt.Sprintf("%s=%s", C_PATH, path))); err != nil {
 		fDest.Close() // ignore error; Write error takes precedence
 		log.Fatal("Err Write 1=", err)
 	}
@@ -150,9 +167,16 @@ func EscreverFile(path string) string {
 
 		qtd++
 
+		//header que sinaliza o conteudo de um arquivo
+		var hdrFile string
+		if encodarBase64 {
+			hdrFile = fmt.Sprintf("\r\n%s=%s\r\n", C_FILE_base64, f)
+		} else {
+			hdrFile = fmt.Sprintf("\r\n%s=%s\r\n", C_FILE, f)
+		}
+
 		//grava caminho arquivo atual
-		//if _, err := fDest.Write([]byte(fmt.Sprintf("\r\n%s=%s\r\n", C_FILE, f))); err != nil {
-		if _, err := fDest.Write(cryptBytes([]byte(fmt.Sprintf("\r\n%s=%s\r\n", C_FILE, f)))); err != nil {
+		if _, err := fDest.Write([]byte(hdrFile)); err != nil {
 			fDest.Close() // ignore error; Write error takes precedence
 			log.Fatal("Err Write 2=", err)
 		}
@@ -163,16 +187,21 @@ func EscreverFile(path string) string {
 			log.Fatal("Err ReadFile=", err)
 		}
 
-		byt = cryptBytes(byt)
-
-		if err != nil {
-			fDest.Close()
-			log.Fatal("Err cryptByt=", err)
+		var s64 string
+		var byt2 []byte
+		if encodarBase64 {
+			//encoda em base 64
+			s64 = b64.StdEncoding.EncodeToString(byt)
+			byt2 = make([]byte, len(s64))
+			copy(byt2, []byte(s64))
+		} else {
+			byt2 = make([]byte, len(byt))
+			copy(byt2, byt)
 		}
 
 		//grava conteudo arquivo atual
-		if _, err := fDest.Write(byt); err != nil {
-			fDest.Close()
+		if _, err := fDest.Write(byt2); err != nil {
+			fDest.Close() // ignore error; Write error takes precedence
 			log.Fatal("Err Write 3=", err)
 		}
 	}
@@ -187,18 +216,6 @@ func EscreverFile(path string) string {
 	return destFile
 }
 
-func cryptBytes(byt []byte) []byte {
-	for i, b := range byt {
-		if b == 0x00 {
-			b = 0xff
-		} else {
-			b = b - 0x1
-		}
-		byt[i] = b
-	}
-	return byt
-}
-
 func dirExists(filename string) bool {
 	info, err := os.Stat(filename)
 	if os.IsNotExist(err) {
@@ -207,7 +224,7 @@ func dirExists(filename string) bool {
 	return info.IsDir()
 }
 
-func filterFiles(allFiles []string) ([]string, int) {
+func filterFiles(allFiles []string, filtrarArquivos bool) ([]string, int) {
 	var fp string
 	var interromp = false
 
@@ -299,7 +316,7 @@ func getAllFilesInDir(path string, allFiles []string) []string {
 }
 
 func CompressFile(file string) {
-	zipFile := strings.ReplaceAll(file, ".txt", ".zip")
+	zipFile := strings.ReplaceAll(file, ".gp", ".zip")
 	entry := filepath.Base(file) //pega apenas o nome do arquivo
 
 	fmt.Printf("Zipando %s em %s, entry=%s\n", file, zipFile, entry)
@@ -336,3 +353,153 @@ func CompressFile(file string) {
 		panic(err)
 	}
 }
+
+func Ler() error {
+
+	fmt.Printf("Informa o arquivo a ler (+ENTER):")
+	reader = bufio.NewReader(os.Stdin)
+	bytes, _, err := reader.ReadLine()
+	if err != nil {
+		fmt.Printf("err=%v", err)
+		return err
+	}
+	arquivo := string(bytes)
+
+	_, err = os.Stat(arquivo)
+	if os.IsNotExist(err) {
+		log.Fatal("O Arquivo não foi encontrado : <{file}>")
+		return nil
+	}
+
+	fmt.Println("Informa o diretorio de destino (+ENTER):")
+	reader = bufio.NewReader(os.Stdin)
+	bytes, _, err = reader.ReadLine()
+	if err != nil {
+		fmt.Printf("err=%v", err)
+		return err
+	}
+	path := string(bytes)
+
+	if !dirExists(path) {
+		panic(fmt.Sprintf("O Caminho não foi encontrado : <%s>\n", path))
+
+		//TODO:criar o diretorio
+	}
+
+	start1 := time.Now()
+
+	//destFile := LerFile(arquivo, path)
+
+	elapsed1 := time.Since(start1)
+
+	fmt.Printf("Tempo execução Escrever= %s\n", elapsed1)
+
+	return nil
+}
+
+// func LerFile(arquivo, path string) bool {
+
+// 	allLines := make([]string, 0)
+
+// 	f, err := os.Open(arquivo)
+// 	if err != nil {
+// 		return allLines, err
+// 	}
+// 	defer f.Close()
+
+// 	//abre um scan
+// 	scanner := bufio.NewScanner(f)
+
+// 	numLinha := 1
+// 	var beginPath, beginArq string
+
+// 	for scanner.Scan() {
+// 		linha := scanner.Text()
+// 		tipo = linha[:len(C_PATH)]
+
+// 		if numLinha == 1 && tipo != C_PATH {
+// 			log.Fatal("A primeira linha do arquivo deve conter o Path")
+// 			return false
+// 		}
+
+// 		//TODOOOOOOOOOOOOOOOOOOOOO
+
+// 		numLinha++
+// 	}
+
+// 	if err := scanner.Err(); err != nil {
+// 		return allLines, err
+// 	}
+
+// 	// var lines = File.ReadAllLines(file);
+
+//     // var linePath = lines[0];
+//     // if (!linePath.Contains(C_PATH))
+//     // {
+//     //     fmt.Printf("A primeira linha do arquivo deve conter o Path");
+//     //     return 0;
+//     // }
+
+//     // linePath = linePath.Replace($"{C_PATH}=", string.Empty);
+
+//     // var count = lines.Where(l => l.StartsWith(C_FILE)).Count();
+
+//     // fmt.Printf("Path original = {linePath}");
+//     // fmt.Printf("Processando {count} arquivos...");
+
+//     // var nextLine = "";
+//     // var arqFile = "";
+//     // List<string> newLines = new();
+
+//     // for (int i = 1; i < lines.Count(); i++)
+//     // {
+//     //     var line = lines[i];
+//     //     if (i < lines.Count() - 1)
+//     //     {
+//     //         nextLine = lines[i + 1];
+//     //     }
+
+//     //     if (line.StartsWith(C_FILE))
+//     //     {
+//     //         //arquivo atual
+//     //         arqFile = line.Replace($"{C_FILE}=", string.Empty);
+//     //         //novo caminho
+//     //         arqFile = arqFile.Replace($"{linePath}", newPath);
+
+//     //         CriarDiretorio(arqFile);
+
+//     //         newLines = new List<string>();
+//     //         fmt.Printf("Novo arquivo detectado = {arqFile}");
+//     //     }
+//     //     else
+//     //     {
+//     //         //Console.Write(".");
+//     //         newLines.Add(line);
+//     //     }
+
+//     //     if (nextLine.StartsWith(C_FILE))
+//     //     {
+//     //         //finaliza o arquivo
+//     //         fmt.Printf(" finalizando o arquivo.");
+//     //         File.WriteAllLines(arqFile, newLines);
+//     //     }
+//     // }
+//     // if (newLines.Any())
+//     // {
+//     //     //finaliza o arquivo
+//     //     fmt.Printf(" finalizando o arquivo.");
+//     //     File.WriteAllLines(arqFile, newLines);
+//     // }
+
+//     return 0;
+// }
+
+// static void CriarDiretorio(string file)
+// {
+//     var fi = new FileInfo(file);
+//     if (!Directory.Exists(fi.DirectoryName))
+//     {
+//         fmt.Printf("Criando o diretorio {fi.DirectoryName}...");
+//         Directory.CreateDirectory(fi.DirectoryName);
+//     }
+// }
