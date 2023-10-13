@@ -10,3 +10,4 @@ Option to compress the resulting file
 Roadmap:
 . use arguments instead of prompts
 . option to use criptography for encrypting the content
+. translate all code and comments into English language
